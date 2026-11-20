@@ -82,10 +82,6 @@ button[kind="primary"],button[kind="primaryFormSubmit"] {
 }
 button[kind="primary"]:hover,button[kind="primaryFormSubmit"]:hover {background:#0d503f;border-color:#0d503f;}
 @media (prefers-reduced-motion: no-preference) {
-    [data-testid="stMain"]:has(.st-key-page-intro-overview) {
-        animation:warehouse-background 18s ease-in-out infinite alternate;
-    }
-    .warehouse-robot__body {animation:robot-hover 3.4s ease-in-out infinite;}
     .warehouse-robot__eye {animation:robot-blink 6.2s ease-in-out infinite;}
     [class*="st-key-page-intro-"]:not(.st-key-page-intro-overview) {animation:page-enter 240ms ease-out both;}
     [data-testid="stForm"] {animation:form-enter 320ms cubic-bezier(.2,.7,.3,1) both;}
@@ -101,14 +97,6 @@ button[kind="primary"]:hover,button[kind="primaryFormSubmit"]:hover {background:
     button[kind="primary"]:active,button[kind="primaryFormSubmit"]:active {
         transform:translateY(1px);box-shadow:none;
     }
-}
-@keyframes warehouse-background {
-    from {background-position:0% 0%,100% 0%;}
-    to {background-position:100% 60%,0% 75%;}
-}
-@keyframes robot-hover {
-    0%,100% {transform:translateY(0) rotate(-2deg);}
-    50% {transform:translateY(-6px) rotate(2deg);}
 }
 @keyframes robot-blink {
     0%,45%,51%,100% {transform:scaleY(1);}
