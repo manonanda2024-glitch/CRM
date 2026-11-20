@@ -65,5 +65,21 @@ class InventoryTests(unittest.TestCase):
         history = db.rows(db.STOCK_HISTORY)
         self.assertEqual([(row['Movement'], row['Quantity']) for row in history], [('Receipt', 10)])
 
+    def test_delete_mistaken_product_removes_only_its_first_delivery(self):
+        db.add_product('NEW', 'Mistaken entry', 'Panels', 'Nos', 8)
+        pid = db.rows("SELECT id FROM products WHERE sku='NEW'")[0]['id']
+        db.delete_mistaken_product(pid, 'NEW')
+        self.assertEqual([product['sku'] for product in db.overview_products()], ['P1'])
+        self.assertEqual(db.rows(db.STOCK_HISTORY), [])
+
+    def test_delete_mistaken_product_preserves_later_movements(self):
+        db.add_product('NEW', 'Active product', 'Panels', 'Nos', 8)
+        pid = db.rows("SELECT id FROM products WHERE sku='NEW'")[0]['id']
+        db.move(pid, 'Issue', 2, 0, None, None, 'Send stock', '', destination='Job Site A')
+        with self.assertRaises(ValueError):
+            db.delete_mistaken_product(pid, 'NEW')
+        self.assertEqual(db.rows("SELECT stock FROM products WHERE sku='NEW'")[0]['stock'], 6)
+        self.assertEqual(len(db.rows(db.STOCK_HISTORY)), 2)
+
 if __name__ == '__main__':
     unittest.main()

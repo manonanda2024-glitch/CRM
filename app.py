@@ -87,9 +87,8 @@ button[kind="primary"]:hover,button[kind="primaryFormSubmit"]:hover {background:
     }
     .warehouse-robot__body {animation:robot-hover 3.4s ease-in-out infinite;}
     .warehouse-robot__eye {animation:robot-blink 6.2s ease-in-out infinite;}
-    [class*="st-key-page-intro-"] {animation:page-enter 240ms ease-out both;}
+    [class*="st-key-page-intro-"]:not(.st-key-page-intro-overview) {animation:page-enter 240ms ease-out both;}
     [data-testid="stForm"] {animation:form-enter 320ms cubic-bezier(.2,.7,.3,1) both;}
-    .st-key-save-confirmation {animation:confirm-enter 320ms cubic-bezier(.2,.7,.3,1) both;}
     [data-testid="stSidebar"] [role="radiogroup"] label {
         transition:background-color 160ms ease;
     }
@@ -123,10 +122,6 @@ button[kind="primary"]:hover,button[kind="primaryFormSubmit"]:hover {background:
     from {opacity:0;transform:translateY(10px);}
     to {opacity:1;transform:translateY(0);}
 }
-@keyframes confirm-enter {
-    from {opacity:0;transform:translateY(-5px);}
-    to {opacity:1;transform:translateY(0);}
-}
 </style>''', unsafe_allow_html=True)
 
 password = os.environ.get('APP_PASSWORD')
@@ -149,15 +144,13 @@ if os.environ.get('RENDER') and not db.DATABASE_URL:
     st.stop()
 
 
-@st.cache_resource
-def initialize_local_database():
+@st.cache_resource(ttl=300)
+def initialize_database(database_key):
     db.init()
 
 
-if db.DATABASE_URL:
-    db.init()
-else:
-    initialize_local_database()
+database_key = hashlib.sha256(db.DATABASE_URL.encode()).hexdigest() if db.DATABASE_URL else str(db.DB_PATH)
+initialize_database(database_key)
 st.sidebar.title('☀️ MANONANDA')
 st.sidebar.caption('SOLAR ENERGY · OPERATIONS')
 pages = {
@@ -166,8 +159,11 @@ pages = {
     'Receipt': 'Receive stock',
     'Issue': 'Send stock',
     'Destinations': 'Sent to',
+    'Corrections': 'Correct product',
 }
-page = st.sidebar.radio('Menu', list(pages), format_func=pages.get)
+if st.session_state.pop('return_to_overview', False):
+    st.session_state.menu_page = 'Overview'
+page = st.sidebar.radio('Menu', list(pages), format_func=pages.get, key='menu_page')
 st.sidebar.divider()
 if password and st.sidebar.button('Sign out'):
     st.session_state.clear()
@@ -192,8 +188,13 @@ with st.container(key=f'page-intro-{page.lower()}'):
             </div>
         ''')
 if saved_message := st.session_state.pop('record_saved', None):
-    with st.container(key='save-confirmation'):
-        st.success(saved_message)
+    st.success(saved_message)
+
+
+def show_saved_stock(message):
+    st.session_state.record_saved = message
+    st.session_state.return_to_overview = True
+    st.rerun()
 
 def table(data):
     if data:
@@ -210,7 +211,7 @@ def table(data):
 
 @st.fragment(run_every=5)
 def inventory_dashboard():
-    products, _, _, _ = db.inventory_snapshot()
+    products = db.overview_products()
     groups = [
         ('Panels', [p for p in products if p['category'] == 'Panels']),
         ('Inverters', [p for p in products if p['category'] == 'Inverters']),
@@ -263,8 +264,41 @@ elif page == 'Inventory':
                 except db.IntegrityError:
                     st.error('Could not add the product. Try again.')
                 else:
-                    st.session_state.record_saved = f'Product added with {quantity:g} in stock.'
-                    st.rerun()
+                    show_saved_stock(f'Product added with {quantity:g} in stock.')
+
+elif page == 'Corrections':
+    products = db.rows('SELECT id,sku,name,stock FROM products ORDER BY name,sku')
+    if not products:
+        st.info('There are no products to correct.')
+    else:
+        options = {p['id']: p for p in products}
+        product_id = st.selectbox('Product', list(options),
+                                  format_func=lambda pid: f"{options[pid]['name']} · {options[pid]['sku']}")
+        product = options[product_id]
+        with st.form(f'rename-{product_id}'):
+            name = st.text_input('Correct product name', value=product['name']).strip()
+            if st.form_submit_button('Save name', type='primary'):
+                if not name:
+                    st.error('Enter the product name.')
+                elif not db.rows('UPDATE products SET name=? WHERE id=? AND sku=? RETURNING id',
+                                 (name, product_id, product['sku'])):
+                    st.error('That product no longer exists.')
+                else:
+                    show_saved_stock('Product name updated.')
+        with st.expander('Delete a mistaken product'):
+            st.caption('This removes the product and any first delivery entered with it. Products with later stock activity can only be renamed.')
+            with st.form(f'delete-{product_id}'):
+                confirmed = st.checkbox(f"I want to delete {product['name']} and its first delivery.")
+                if st.form_submit_button('Delete product'):
+                    if not confirmed:
+                        st.error('Tick the box to confirm the deletion.')
+                    else:
+                        try:
+                            db.delete_mistaken_product(product_id, product['sku'])
+                        except (ValueError, db.IntegrityError) as exc:
+                            st.error(str(exc) if isinstance(exc, ValueError) else 'This product is still linked to stock history.')
+                        else:
+                            show_saved_stock('Mistaken product deleted.')
 
 elif page == 'Destinations':
     sent_to()
@@ -300,6 +334,5 @@ elif page in ('Receipt', 'Issue'):
                     except (ValueError, db.IntegrityError):
                         st.error('Could not save the stock change. Check how much is in the warehouse.')
                     else:
-                        st.session_state.record_saved = f'Stock sent to {destination}.' if sending else 'Stock received.'
-                        st.rerun()
+                        show_saved_stock(f'Stock sent to {destination}.' if sending else 'Stock received.')
 

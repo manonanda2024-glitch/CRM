@@ -79,6 +79,7 @@ def init():
                 SELECT to_regclass('products') IS NOT NULL
                    AND to_regclass('contacts') IS NOT NULL
                    AND to_regclass('projects') IS NOT NULL
+                   AND to_regclass('warehouse_products') IS NOT NULL
                    AND EXISTS (
                        SELECT 1 FROM pg_attribute
                        WHERE attrelid = to_regclass('movements')
@@ -96,6 +97,12 @@ def init():
             for statement in schema.strip().rstrip(';').split(';'):
                 c.execute(statement)
             c.execute('ALTER TABLE movements ADD COLUMN IF NOT EXISTS destination TEXT')
+            c.execute('''
+                CREATE OR REPLACE VIEW warehouse_products AS
+                SELECT name AS product, category, stock AS in_stock,
+                       CASE WHEN unit = 'Nos' THEN 'Pieces' ELSE unit END AS unit
+                FROM products
+            ''')
         else:
             c.executescript(SCHEMA)
             c.execute('BEGIN IMMEDIATE')
@@ -136,6 +143,28 @@ def add_product(sku, name, category, unit, quantity):
                     VALUES(?,'Receipt',?,0,'First delivery')''', (product_id, quantity))
 
 
+def delete_mistaken_product(product_id, sku):
+    with connect() as c:
+        if not DATABASE_URL:
+            c.execute('BEGIN IMMEDIATE')
+        lock = ' FOR UPDATE' if DATABASE_URL else ''
+        product = query(c, 'SELECT stock FROM products WHERE id=? AND sku=?' + lock, (product_id, sku)).fetchone()
+        if product is None:
+            raise ValueError('That product no longer exists.')
+        movements = query(c, '''
+            SELECT kind, quantity, reference FROM movements WHERE product_id=? LIMIT 2
+        ''', (product_id,)).fetchall()
+        if movements:
+            entry = movements[0]
+            if (len(movements) != 1 or entry['kind'] != 'Receipt' or
+                    entry['reference'] != 'First delivery' or entry['quantity'] != product['stock']):
+                raise ValueError('This product has stock history. You can correct its name.')
+            query(c, 'DELETE FROM movements WHERE product_id=?', (product_id,))
+        elif product['stock'] != 0:
+            raise ValueError('This product still has stock. You can correct its name.')
+        query(c, 'DELETE FROM products WHERE id=? AND sku=?', (product_id, sku))
+
+
 STOCK_HISTORY_SELECT = '''
     SELECT m.created AS "Time (UTC)", p.name AS "Product", m.kind AS "Movement",
            m.quantity AS "Quantity", p.unit AS "Unit",
@@ -154,21 +183,26 @@ def dispatch_history():
     """)
 
 
+STOCK_TOTALS = '''WITH movement_totals AS (
+    SELECT product_id,
+           SUM(CASE WHEN kind IN ('Receipt', 'Customer return') THEN quantity ELSE 0 END) AS stock_in,
+           SUM(CASE WHEN kind IN ('Issue', 'Supplier return') THEN quantity ELSE 0 END) AS stock_out
+    FROM movements GROUP BY product_id
+)
+SELECT p.sku,p.name,p.category,p.variant,p.specification,p.unit,p.minimum,p.stock,
+       COALESCE(m.stock_in, 0) AS stock_in, COALESCE(m.stock_out, 0) AS stock_out
+FROM products p LEFT JOIN movement_totals m ON m.product_id=p.id
+ORDER BY p.category,p.name,p.sku'''
+
+
+def overview_products():
+    return rows(STOCK_TOTALS)
+
+
 def inventory_snapshot():
     with connect() as c:
         c.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY' if DATABASE_URL else 'BEGIN')
-        products = [dict(row) for row in c.execute(
-            '''WITH movement_totals AS (
-                   SELECT product_id,
-                          SUM(CASE WHEN kind IN ('Receipt', 'Customer return') THEN quantity ELSE 0 END) AS stock_in,
-                          SUM(CASE WHEN kind IN ('Issue', 'Supplier return') THEN quantity ELSE 0 END) AS stock_out
-                   FROM movements GROUP BY product_id
-               )
-               SELECT p.sku,p.name,p.category,p.variant,p.specification,p.unit,p.minimum,p.stock,
-                      COALESCE(m.stock_in, 0) AS stock_in, COALESCE(m.stock_out, 0) AS stock_out
-               FROM products p LEFT JOIN movement_totals m ON m.product_id=p.id
-               ORDER BY p.category,p.name,p.sku'''
-        )]
+        products = [dict(row) for row in c.execute(STOCK_TOTALS)]
         active_projects = c.execute(
             "SELECT COUNT(*) AS total FROM projects WHERE stage IS NULL OR stage NOT IN ('Completed','Lost')"
         ).fetchone()['total']
