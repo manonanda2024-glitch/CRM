@@ -150,11 +150,14 @@ if os.environ.get('RENDER') and not db.DATABASE_URL:
 
 
 @st.cache_resource
-def initialize_database():
+def initialize_local_database():
     db.init()
 
 
-initialize_database()
+if db.DATABASE_URL:
+    db.init()
+else:
+    initialize_local_database()
 st.sidebar.title('☀️ MANONANDA')
 st.sidebar.caption('SOLAR ENERGY · OPERATIONS')
 pages = {
