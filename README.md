@@ -16,7 +16,7 @@ Leave **Warehouse stock** open to see quantities received, sent out, and still i
 
 ## Deploy Streamlit with Render PostgreSQL
 
-1. Create or select a Render PostgreSQL database. Use the same region for the database and web service. The Blueprint currently specifies Oregon for the app. Update `region` in `render.yaml` if your database is elsewhere.
+1. Create or select a Render PostgreSQL database in Singapore, the region configured for the web service in `render.yaml`.
 2. Push the application files to GitHub, then connect that repository to a new Render Blueprint. In the app's Environment settings, set `DATABASE_URL` to the database's **Internal Database URL**. Render generates `APP_PASSWORD` for the app.
 3. To copy existing records, run the import locally before adding any records through the hosted app. Paste the database's **External Database URL** into the hidden prompt. If external access is restricted, allow your IP for the import and remove that entry after it completes.
 
