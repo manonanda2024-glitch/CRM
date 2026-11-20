@@ -147,8 +147,8 @@ pages = {
     'Receipt': 'Receive stock',
     'Issue': 'Send stock',
     'Destinations': 'Sent to',
-    'Corrections': 'Correct product',
 }
+unit_labels = {'Nos': 'Pieces', 'Metres': 'Meters'}
 if st.session_state.pop('return_to_overview', False):
     st.session_state.menu_page = 'Overview'
 page = st.sidebar.radio('Menu', list(pages), format_func=pages.get, key='menu_page')
@@ -188,7 +188,7 @@ def table(data):
     if data:
         frame = pd.DataFrame(data)
         if 'Unit' in frame:
-            frame['Unit'] = frame['Unit'].replace('Nos', 'Pieces')
+            frame['Unit'] = frame['Unit'].replace(unit_labels)
         if 'Time (UTC)' in frame:
             india_time = pd.to_datetime(frame.pop('Time (UTC)'), utc=True).dt.tz_convert('Asia/Kolkata')
             frame['Time (IST)'] = india_time.dt.strftime('%Y-%m-%d %I:%M:%S %p')
@@ -228,33 +228,7 @@ def sent_to():
         st.info('Stock sent to a customer or job site will appear here.')
 
 
-if page == 'Overview':
-    inventory_dashboard()
-
-elif page == 'Inventory':
-    with st.form('product', clear_on_submit=True):
-        name = st.text_input('Product name *', placeholder='For example, Waaree TOPCon panel')
-        category = st.selectbox('Category', list(db.CATEGORIES))
-        unit = st.selectbox('Count in', ['Nos', 'Metres', 'Sets', 'Kg', 'Rolls', 'Bundles'],
-                           format_func=lambda unit: 'Pieces' if unit == 'Nos' else unit)
-        quantity = st.number_input('How many came in? *', min_value=0.01, value=None, placeholder='Enter quantity')
-        if st.form_submit_button('Add product', type='primary'):
-            if not name.strip():
-                st.error('Enter the product name.')
-            elif quantity is None:
-                st.error('Enter how many came in.')
-            else:
-                prefix = {'Panels': 'PNL', 'Inverters': 'INV'}.get(category, 'ITEM')
-                name_code = re.sub(r'[\W_]+', '-', name.strip().upper()).strip('-')[:32].rstrip('-') or 'PRODUCT'
-                sku = f'{prefix}-{name_code}-{uuid4().hex[:12].upper()}'
-                try:
-                    db.add_product(sku, name.strip(), category, unit, quantity)
-                except db.IntegrityError:
-                    st.error('Could not add the product. Try again.')
-                else:
-                    show_saved_stock(f'Product added with {quantity:g} in stock.')
-
-elif page == 'Corrections':
+def correct_product():
     products = db.rows('SELECT id,sku,name,stock FROM products ORDER BY name,sku')
     if not products:
         st.info('There are no products to correct.')
@@ -273,20 +247,49 @@ elif page == 'Corrections':
                     st.error('That product no longer exists.')
                 else:
                     show_saved_stock('Product name updated.')
-        with st.expander('Delete a mistaken product'):
+        with st.form(f'delete-{product_id}'):
             st.caption('This removes the product and any first delivery entered with it. Products with later stock activity can only be renamed.')
-            with st.form(f'delete-{product_id}'):
-                confirmed = st.checkbox(f"I want to delete {product['name']} and its first delivery.")
-                if st.form_submit_button('Delete product'):
-                    if not confirmed:
-                        st.error('Tick the box to confirm the deletion.')
+            confirmed = st.checkbox(f"I want to delete {product['name']} and its first delivery.")
+            if st.form_submit_button('Delete product'):
+                if not confirmed:
+                    st.error('Tick the box to confirm the deletion.')
+                else:
+                    try:
+                        db.delete_mistaken_product(product_id, product['sku'])
+                    except (ValueError, db.IntegrityError) as exc:
+                        st.error(str(exc) if isinstance(exc, ValueError) else 'This product is still linked to stock history.')
                     else:
-                        try:
-                            db.delete_mistaken_product(product_id, product['sku'])
-                        except (ValueError, db.IntegrityError) as exc:
-                            st.error(str(exc) if isinstance(exc, ValueError) else 'This product is still linked to stock history.')
-                        else:
-                            show_saved_stock('Mistaken product deleted.')
+                        show_saved_stock('Mistaken product deleted.')
+
+
+if page == 'Overview':
+    with st.expander('Delete product or correct its name', key='stock-corrections', on_change='rerun') as corrections:
+        if corrections.open:
+            correct_product()
+    inventory_dashboard()
+
+elif page == 'Inventory':
+    with st.form('product', clear_on_submit=True):
+        name = st.text_input('Product name *', placeholder='For example, Waaree TOPCon panel')
+        category = st.selectbox('Category', list(db.CATEGORIES))
+        unit = st.selectbox('Count in', ['Nos', 'Metres', 'Sets', 'Kg', 'Rolls', 'Bundles'],
+                           format_func=lambda unit: unit_labels.get(unit, unit))
+        quantity = st.number_input('How many came in? *', min_value=0.01, value=None, placeholder='Enter quantity')
+        if st.form_submit_button('Add product', type='primary'):
+            if not name.strip():
+                st.error('Enter the product name.')
+            elif quantity is None:
+                st.error('Enter how many came in.')
+            else:
+                prefix = {'Panels': 'PNL', 'Inverters': 'INV'}.get(category, 'ITEM')
+                name_code = re.sub(r'[\W_]+', '-', name.strip().upper()).strip('-')[:32].rstrip('-') or 'PRODUCT'
+                sku = f'{prefix}-{name_code}-{uuid4().hex[:12].upper()}'
+                try:
+                    db.add_product(sku, name.strip(), category, unit, quantity)
+                except db.IntegrityError:
+                    st.error('Could not add the product. Try again.')
+                else:
+                    show_saved_stock(f'Product added with {quantity:g} in stock.')
 
 elif page == 'Destinations':
     sent_to()
@@ -304,7 +307,7 @@ elif page in ('Receipt', 'Issue'):
                 labels[p['id']] += f" · {p['sku']}"
         product_id = st.selectbox('Product', list(labels), format_func=labels.get)
         product = next(p for p in products if p['id'] == product_id)
-        unit = 'pieces' if product['unit'] == 'Nos' else product['unit'].lower()
+        unit = unit_labels.get(product['unit'], product['unit']).lower()
         st.caption(f"In stock: {product['stock']:g} {unit}")
         with st.form(f'movement-{page}', clear_on_submit=True):
             question = 'How many are going out?' if sending else 'How many came in?'

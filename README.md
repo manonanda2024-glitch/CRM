@@ -38,7 +38,7 @@ Render Free PostgreSQL expires after 30 days and has no managed backups. Export 
 1. Open **Add product**. Enter its name, category, how you count it, and how many came in. Saving also records the first delivery.
 2. For later deliveries, open **Receive stock**, select the existing product, and enter the quantity.
 3. When stock leaves, open **Send stock** and enter the quantity and the customer or job site. The destination appears under **Sent to**.
-4. Use **Correct product** to fix a name or delete a mistaken entry with no later stock activity. Deleting also removes the first delivery entered with that product, if present.
+4. On **Warehouse stock**, open **Delete product or correct its name**. You can delete a mistaken entry with no later stock activity. Deleting also removes the first delivery entered with that product, if present.
 
 In pgAdmin, open **Schemas → public → Views → warehouse_products** for a stock list with just the product, category, quantity in stock, and unit.
 

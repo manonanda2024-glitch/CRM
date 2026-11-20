@@ -79,7 +79,7 @@ def init():
                 SELECT to_regclass('products') IS NOT NULL
                    AND to_regclass('contacts') IS NOT NULL
                    AND to_regclass('projects') IS NOT NULL
-                   AND to_regclass('warehouse_products') IS NOT NULL
+                   AND strpos(pg_get_viewdef(to_regclass('warehouse_products')), 'Meters') > 0
                    AND EXISTS (
                        SELECT 1 FROM pg_attribute
                        WHERE attrelid = to_regclass('movements')
@@ -100,7 +100,7 @@ def init():
             c.execute('''
                 CREATE OR REPLACE VIEW warehouse_products AS
                 SELECT name AS product, category, stock AS in_stock,
-                       CASE WHEN unit = 'Nos' THEN 'Pieces' ELSE unit END AS unit
+                       CASE unit WHEN 'Nos' THEN 'Pieces' WHEN 'Metres' THEN 'Meters' ELSE unit END AS unit
                 FROM products
             ''')
         else:
