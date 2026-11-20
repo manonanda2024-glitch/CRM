@@ -12,7 +12,7 @@ python -m streamlit run app.py
 
 Open http://localhost:8501. Local data lives in `data/solar.db`. Without APP_PASSWORD, local development does not require login.
 
-Leave **Warehouse stock** open to see quantities received, sent out, and still in the warehouse. It refreshes every five seconds.
+**Warehouse stock** shows quantities received and still in the warehouse. It updates when you save a stock change or reopen the page.
 
 ## Deploy Streamlit with Render PostgreSQL
 
@@ -38,7 +38,7 @@ Render Free PostgreSQL expires after 30 days and has no managed backups. Export 
 1. Open **Add product**. Enter its name, category, how you count it, and how many came in. Saving also records the first delivery.
 2. For later deliveries, open **Receive stock**, select the existing product, and enter the quantity.
 3. When stock leaves, open **Send stock** and enter the quantity and the customer or job site. The destination appears under **Sent to**.
-4. On **Warehouse stock**, open **Delete product or correct its name**. You can delete a mistaken entry with no later stock activity. Deleting also removes the first delivery entered with that product, if present.
+4. On **Warehouse stock**, use **Correct a product name** to fix a typo, or **Delete** next to a mistaken product. Deleting requires confirmation and removes its first delivery, if present. Products with later stock activity can only be renamed.
 
 In pgAdmin, open **Schemas → public → Views → warehouse_products** for a stock list with just the product, category, quantity in stock, and unit.
 

@@ -189,7 +189,7 @@ STOCK_TOTALS = '''WITH movement_totals AS (
            SUM(CASE WHEN kind IN ('Issue', 'Supplier return') THEN quantity ELSE 0 END) AS stock_out
     FROM movements GROUP BY product_id
 )
-SELECT p.sku,p.name,p.category,p.variant,p.specification,p.unit,p.minimum,p.stock,
+SELECT p.id,p.sku,p.name,p.category,p.variant,p.specification,p.unit,p.minimum,p.stock,
        COALESCE(m.stock_in, 0) AS stock_in, COALESCE(m.stock_out, 0) AS stock_out
 FROM products p LEFT JOIN movement_totals m ON m.product_id=p.id
 ORDER BY p.category,p.name,p.sku'''

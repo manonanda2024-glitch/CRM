@@ -194,7 +194,22 @@ def table(data):
         st.info('No records yet. Add your first record to get started.')
 
 
-@st.fragment(run_every=5)
+@st.dialog('Delete product')
+def confirm_product_deletion(product):
+    st.text(product['name'])
+    st.caption('Deleting also removes the first delivery. Products with later stock activity can only be renamed.')
+    confirmed = st.checkbox('Delete this product and its first delivery')
+    if st.button('Delete product', type='primary', disabled=not confirmed):
+        try:
+            db.delete_mistaken_product(product['id'], product['sku'])
+        except ValueError as exc:
+            st.error(str(exc))
+        except db.IntegrityError:
+            st.error('This product is still linked to stock history.')
+        else:
+            show_saved_stock('Mistaken product deleted.')
+
+
 def inventory_dashboard():
     products = db.overview_products()
     groups = [
@@ -207,10 +222,20 @@ def inventory_dashboard():
     for heading, group in groups:
         if group:
             st.subheader(heading)
-            table([
-                {'Product': p['name'], 'In stock': p['stock'], 'Received': p['stock_in'], 'Unit': p['unit']}
-                for p in group
-            ])
+            widths = [3, 2, 2, 1.4]
+            with st.container(border=True):
+                headers = st.columns(widths)
+                for column, label in zip(headers, ('Product', 'In stock', 'Received')):
+                    column.markdown(f'**{label}**')
+                for product in group:
+                    name, stock, received, action = st.columns(widths, vertical_alignment='center')
+                    unit = unit_labels.get(product['unit'], product['unit'])
+                    name.text(product['name'])
+                    stock.text(f"{product['stock']:g} {unit}")
+                    received.text(f"{product['stock_in']:g} {unit}")
+                    if action.button('Delete', key=f"delete-product-{product['id']}",
+                                     help=f"Delete {product['name']}"):
+                        confirm_product_deletion(product)
 
 
 @st.fragment(run_every=5)
@@ -244,23 +269,8 @@ def correct_product():
                     st.error('That product no longer exists.')
                 else:
                     show_saved_stock('Product name updated.')
-        with st.form(f'delete-{product_id}'):
-            st.caption('This removes the product and any first delivery entered with it. Products with later stock activity can only be renamed.')
-            confirmed = st.checkbox(f"I want to delete {product['name']} and its first delivery.")
-            if st.form_submit_button('Delete product'):
-                if not confirmed:
-                    st.error('Tick the box to confirm the deletion.')
-                else:
-                    try:
-                        db.delete_mistaken_product(product_id, product['sku'])
-                    except (ValueError, db.IntegrityError) as exc:
-                        st.error(str(exc) if isinstance(exc, ValueError) else 'This product is still linked to stock history.')
-                    else:
-                        show_saved_stock('Mistaken product deleted.')
-
-
 if page == 'Overview':
-    with st.expander('Delete product or correct its name', key='stock-corrections', on_change='rerun') as corrections:
+    with st.expander('Correct a product name', key='stock-corrections', on_change='rerun') as corrections:
         if corrections.open:
             correct_product()
     inventory_dashboard()
