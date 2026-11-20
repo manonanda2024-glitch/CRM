@@ -82,25 +82,22 @@ button[kind="primary"],button[kind="primaryFormSubmit"] {
 }
 button[kind="primary"]:hover,button[kind="primaryFormSubmit"]:hover {background:#0d503f;border-color:#0d503f;}
 @media (prefers-reduced-motion: no-preference) {
-    .warehouse-robot__eye {animation:robot-blink 6.2s ease-in-out infinite;}
     [class*="st-key-page-intro-"]:not(.st-key-page-intro-overview) {animation:page-enter 240ms ease-out both;}
-    [data-testid="stForm"] {animation:form-enter 320ms cubic-bezier(.2,.7,.3,1) both;}
-    [data-testid="stSidebar"] [role="radiogroup"] label {
-        transition:background-color 160ms ease;
+    .stApp:not(:has(.st-key-page-intro-overview)) {
+        & [data-testid="stForm"] {animation:form-enter 320ms cubic-bezier(.2,.7,.3,1) both;}
+        & [data-testid="stSidebar"] [role="radiogroup"] label {
+            transition:background-color 160ms ease;
+        }
+        & button:is([kind="primary"],[kind="primaryFormSubmit"]) {
+            transition:background-color 150ms ease,box-shadow 150ms ease,transform 150ms ease;
+        }
+        & button:is([kind="primary"],[kind="primaryFormSubmit"]):hover {
+            transform:translateY(-1px);box-shadow:0 4px 10px #12655030;
+        }
+        & button:is([kind="primary"],[kind="primaryFormSubmit"]):active {
+            transform:translateY(1px);box-shadow:none;
+        }
     }
-    button[kind="primary"],button[kind="primaryFormSubmit"] {
-        transition:background-color 150ms ease,box-shadow 150ms ease,transform 150ms ease;
-    }
-    button[kind="primary"]:hover,button[kind="primaryFormSubmit"]:hover {
-        transform:translateY(-1px);box-shadow:0 4px 10px #12655030;
-    }
-    button[kind="primary"]:active,button[kind="primaryFormSubmit"]:active {
-        transform:translateY(1px);box-shadow:none;
-    }
-}
-@keyframes robot-blink {
-    0%,45%,51%,100% {transform:scaleY(1);}
-    48% {transform:scaleY(.12);}
 }
 @keyframes page-enter {
     from {opacity:0;transform:translateY(6px);}
