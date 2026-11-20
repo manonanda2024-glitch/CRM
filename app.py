@@ -197,6 +197,9 @@ def table(data):
         frame = pd.DataFrame(data)
         if 'Unit' in frame:
             frame['Unit'] = frame['Unit'].replace('Nos', 'Pieces')
+        if 'Time (UTC)' in frame:
+            india_time = pd.to_datetime(frame.pop('Time (UTC)'), utc=True).dt.tz_convert('Asia/Kolkata')
+            frame['Time (IST)'] = india_time.dt.strftime('%Y-%m-%d %I:%M:%S %p')
         st.dataframe(frame, hide_index=True, width='stretch')
     else:
         st.info('No records yet. Add your first record to get started.')
