@@ -141,12 +141,11 @@ st.sidebar.caption('SOLAR ENERGY · OPERATIONS')
 pages = {
     'Overview': 'Warehouse stock',
     'Inventory': 'Add product',
-    'Receipt': 'Receive stock',
     'Issue': 'Send stock',
     'Destinations': 'Sent to',
 }
 unit_labels = {'Nos': 'Pieces', 'Metres': 'Meters'}
-if st.session_state.pop('return_to_overview', False):
+if st.session_state.pop('return_to_overview', False) or st.session_state.get('menu_page') == 'Receipt':
     st.session_state.menu_page = 'Overview'
 page = st.sidebar.radio('Menu', list(pages), format_func=pages.get, key='menu_page')
 st.sidebar.divider()
@@ -238,7 +237,6 @@ def inventory_dashboard():
                         confirm_product_deletion(product)
 
 
-@st.fragment(run_every=5)
 def sent_to():
     shipments = db.dispatch_history()
     if shipments:
@@ -301,8 +299,7 @@ elif page == 'Inventory':
 elif page == 'Destinations':
     sent_to()
 
-elif page in ('Receipt', 'Issue'):
-    sending = page == 'Issue'
+elif page == 'Issue':
     products = db.rows('SELECT id,sku,name,unit,stock FROM products ORDER BY name,sku')
     if not products:
         st.info('Go to Add product first.')
@@ -317,13 +314,13 @@ elif page in ('Receipt', 'Issue'):
         unit = unit_labels.get(product['unit'], product['unit']).lower()
         st.caption(f"In stock: {product['stock']:g} {unit}")
         with st.form(f'movement-{page}', clear_on_submit=True):
-            question = 'How many are going out?' if sending else 'How many came in?'
-            quantity = st.number_input(question, min_value=0.01, value=None, placeholder=f'Enter quantity in {unit}')
-            destination = st.text_input('Where is it going? *', placeholder='Customer name or job site').strip() if sending else None
+            quantity = st.number_input('How many are going out?', min_value=0.01, value=None,
+                                       placeholder=f'Enter quantity in {unit}')
+            destination = st.text_input('Where is it going? *', placeholder='Customer name or job site').strip()
             if st.form_submit_button(pages[page], type='primary'):
                 if quantity is None:
                     st.error('Enter the quantity.')
-                elif sending and not destination:
+                elif not destination:
                     st.error('Enter where the stock is going.')
                 else:
                     try:
@@ -332,5 +329,5 @@ elif page in ('Receipt', 'Issue'):
                     except (ValueError, db.IntegrityError):
                         st.error('Could not save the stock change. Check how much is in the warehouse.')
                     else:
-                        show_saved_stock(f'Stock sent to {destination}.' if sending else 'Stock received.')
+                        show_saved_stock(f'Stock sent to {destination}.')
 
