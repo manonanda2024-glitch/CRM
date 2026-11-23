@@ -12,7 +12,7 @@ python -m streamlit run app.py
 
 Open http://localhost:8501. Local data lives in `data/solar.db`. Without APP_PASSWORD, local development does not require login.
 
-**Warehouse stock** shows quantities received and still in the warehouse. It updates when you save a stock change or reopen the page.
+**Warehouse stock** shows quantities currently in the warehouse. It updates when you save a stock change or reopen the page.
 
 ## Deploy Streamlit with Render PostgreSQL
 

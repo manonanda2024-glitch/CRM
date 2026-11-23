@@ -221,17 +221,16 @@ def inventory_dashboard():
     for heading, group in groups:
         if group:
             st.subheader(heading)
-            widths = [3, 2, 2, 1.4]
+            widths = [3, 2, 1.4]
             with st.container(border=True):
                 headers = st.columns(widths)
-                for column, label in zip(headers, ('Product', 'In stock', 'Received')):
+                for column, label in zip(headers, ('Product', 'In stock')):
                     column.markdown(f'**{label}**')
                 for product in group:
-                    name, stock, received, action = st.columns(widths, vertical_alignment='center')
+                    name, stock, action = st.columns(widths, vertical_alignment='center')
                     unit = unit_labels.get(product['unit'], product['unit'])
                     name.text(product['name'])
                     stock.text(f"{product['stock']:g} {unit}")
-                    received.text(f"{product['stock_in']:g} {unit}")
                     if action.button('Delete', key=f"delete-product-{product['id']}",
                                      help=f"Delete {product['name']}"):
                         confirm_product_deletion(product)
