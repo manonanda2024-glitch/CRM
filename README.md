@@ -12,7 +12,7 @@ python -m streamlit run app.py
 
 Open http://localhost:8501. Local data lives in `data/solar.db`. Without APP_PASSWORD, local development does not require login.
 
-**Warehouse stock** shows the current balance and the most recent receipt quantity for each product. It updates when you save a stock change or reopen the page. Sending stock reduces the balance and preserves the last received quantity.
+**Warehouse stock** shows the balance immediately before the most recent receipt, the quantity received, and the current balance. It updates when you save a stock change or reopen the page. Dispatching stock reduces the current balance while the two receipt columns continue to describe the same delivery.
 
 ## Deploy Streamlit with Render PostgreSQL
 

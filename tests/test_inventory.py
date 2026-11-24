@@ -89,10 +89,12 @@ class InventoryTests(unittest.TestCase):
             db.move(product['id'], 'Receipt', quantity, 0, None, None, 'Receive stock', '', source='Distributor')
             current = next(p for p in db.overview_products() if p['sku'] == 'W1')
             self.assertEqual((current['stock'], current['latest_received']), (expected_stock, quantity))
+            self.assertEqual(current['stock_before_receipt'], expected_stock - quantity)
 
         db.move(product['id'], 'Issue', 4, 0, None, None, 'Send stock', '', destination='Job Site A')
         current = next(p for p in db.overview_products() if p['sku'] == 'W1')
         self.assertEqual((current['stock'], current['latest_received']), (21, 2))
+        self.assertEqual(current['stock_before_receipt'], 23)
         self.assertEqual([(r['Quantity'], r['Received from']) for r in db.receipt_history()],
                          [(2, 'Distributor'), (6, 'Distributor'), (17, 'Waaree')])
         self.assertEqual(db.dispatch_history()[0]['Sent to'], 'Job Site A')

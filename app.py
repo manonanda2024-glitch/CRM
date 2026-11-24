@@ -291,15 +291,17 @@ def inventory_dashboard():
             st.subheader(heading)
             has_duplicates = any(len(duplicates[(db.product_name_key(p['name']), p['category'], p['unit'])]) > 1
                                  for p in group)
-            widths = [3, 2, 2, 1, 1.2] + ([1.2] if has_duplicates else [])
+            widths = [3, 2.4, 1.8, 1.8, 1, 1.2] + ([1.2] if has_duplicates else [])
             with st.container(border=True):
                 headers = st.columns(widths)
-                for column, label in zip(headers, ('Product', 'In stock', 'Last received')):
+                for column, label in zip(headers, ('Product', 'Stock before last receipt', 'Last received', 'Current stock')):
                     column.markdown(f'**{label}**')
                 for product in group:
-                    name, stock, received, edit, delete, *merge = st.columns(widths, vertical_alignment='center')
+                    name, before, received, stock, edit, delete, *merge = st.columns(widths, vertical_alignment='center')
                     unit = unit_labels.get(product['unit'], product['unit'])
                     name.text(product['name'])
+                    previous_stock = product['stock_before_receipt']
+                    before.text(f'{previous_stock:g} {unit}' if previous_stock is not None else '—')
                     stock.text(f"{product['stock']:g} {unit}")
                     latest_quantity = product['latest_received']
                     received.text(f'{latest_quantity:g} {unit}' if latest_quantity is not None else '—')

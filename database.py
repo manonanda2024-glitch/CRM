@@ -339,12 +339,22 @@ STOCK_TOTALS = '''WITH movement_totals AS (
            SUM(CASE WHEN kind IN ('Issue', 'Supplier return', 'Stock adjustment out') THEN quantity ELSE 0 END) AS stock_out,
            MAX(CASE WHEN kind IN ('Receipt', 'Customer return') THEN id END) AS latest_receipt_id
     FROM movements GROUP BY product_id
+), changes_after_receipt AS (
+    SELECT m.product_id,
+           SUM(CASE WHEN m.kind = 'Stock adjustment in' THEN m.quantity
+                    WHEN m.kind IN ('Issue', 'Supplier return', 'Stock adjustment out') THEN -m.quantity
+                    ELSE 0 END) AS net_change
+    FROM movements m JOIN movement_totals totals ON totals.product_id=m.product_id
+    WHERE m.id > totals.latest_receipt_id
+    GROUP BY m.product_id
 )
 SELECT p.id,p.sku,p.name,p.category,p.variant,p.specification,p.unit,p.minimum,p.stock,
        COALESCE(m.stock_in, 0) AS stock_in, COALESCE(m.stock_out, 0) AS stock_out,
-       latest.id AS latest_receipt_id, latest.quantity AS latest_received
+       latest.id AS latest_receipt_id, latest.quantity AS latest_received,
+       p.stock - latest.quantity - COALESCE(after_receipt.net_change, 0) AS stock_before_receipt
 FROM products p LEFT JOIN movement_totals m ON m.product_id=p.id
 LEFT JOIN movements latest ON latest.id=m.latest_receipt_id
+LEFT JOIN changes_after_receipt after_receipt ON after_receipt.product_id=p.id
 ORDER BY p.category,p.name,p.sku'''
 
 
