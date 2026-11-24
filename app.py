@@ -218,13 +218,16 @@ def edit_product_details(product):
         name = st.text_input('Product name', value=product['name'])
         category = st.selectbox('Category', categories, index=categories.index(product['category']))
         unit = unit_labels.get(product['unit'], product['unit'])
-        stock = st.number_input('In stock', min_value=0.0, value=float(product['stock']),
-                                help=f'Current warehouse balance in {unit}.')
+        previous_stock = product['stock_before_receipt']
+        st.text_input('Stock before last receipt',
+                      value=f'{previous_stock:g} {unit}' if previous_stock is not None else '—',
+                      disabled=True, help='Calculated from the warehouse movement history.')
         received = product['latest_received']
         last_received = st.number_input('Last received', min_value=0.0,
                                         value=float(received) if received is not None else None,
                                         help=f'Latest receipt quantity in {unit}. Changing this updates receipt history.')
-        st.caption('Enter the final warehouse balance in In stock. The two quantities are saved independently.')
+        stock = st.number_input('Current stock', min_value=0.0, value=float(product['stock']),
+                                help=f'Enter the final warehouse balance in {unit}.')
         if st.form_submit_button('Save changes', type='primary'):
             try:
                 db.edit_product(product, name, category, stock, last_received)
