@@ -217,9 +217,17 @@ def edit_product_details(product):
     with st.form(f"edit-product-{product['id']}"):
         name = st.text_input('Product name', value=product['name'])
         category = st.selectbox('Category', categories, index=categories.index(product['category']))
+        unit = unit_labels.get(product['unit'], product['unit'])
+        stock = st.number_input('In stock', min_value=0.0, value=float(product['stock']),
+                                help=f'Current warehouse balance in {unit}.')
+        received = product['latest_received']
+        last_received = st.number_input('Last received', min_value=0.0,
+                                        value=float(received) if received is not None else None,
+                                        help=f'Latest receipt quantity in {unit}. Changing this updates receipt history.')
+        st.caption('Enter the final warehouse balance in In stock. The two quantities are saved independently.')
         if st.form_submit_button('Save changes', type='primary'):
             try:
-                db.edit_product(product['id'], product['sku'], name, category)
+                db.edit_product(product, name, category, stock, last_received)
             except ValueError as exc:
                 st.error(str(exc))
             except db.IntegrityError:

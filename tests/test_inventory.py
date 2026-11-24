@@ -97,6 +97,21 @@ class InventoryTests(unittest.TestCase):
                          [(2, 'Distributor'), (6, 'Distributor'), (17, 'Waaree')])
         self.assertEqual(db.dispatch_history()[0]['Sent to'], 'Job Site A')
 
+    def test_edit_stock_and_last_received_independently(self):
+        db.move(self.pid, 'Receipt', 10, 0, None, None, 'Receive stock', '', source='Supplier')
+        db.move(self.pid, 'Issue', 4, 0, None, None, 'Send stock', '', destination='Site')
+        before = db.overview_products()[0]
+        db.edit_product(before, 'Panel', 'Panels', 5, 12)
+        updated = db.overview_products()[0]
+        self.assertEqual((updated['stock'], updated['latest_received']), (5, 12))
+        self.assertEqual((updated['stock_in'], updated['stock_out']), (12, 7))
+        self.assertEqual([(r['Quantity'], r['Received from']) for r in db.receipt_history()], [(12, 'Supplier')])
+        self.assertEqual([r['Quantity'] for r in db.dispatch_history()], [4])
+        with self.assertRaises(ValueError):
+            db.edit_product(before, 'Panel', 'Panels', 8, 10)
+        db.edit_product(updated, 'Panel', 'Panels', 0, 12)
+        self.assertEqual(db.overview_products()[0]['stock'], 0)
+
     def test_merge_duplicates_preserves_current_balance_and_movement_history(self):
         db.move(self.pid, 'Receipt', 36, 0, None, None, 'Receive stock', '', source='Supplier A')
         db.move(self.pid, 'Issue', 15, 0, None, None, 'Send stock', '', destination='Job Site A')

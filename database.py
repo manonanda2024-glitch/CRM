@@ -1,3 +1,4 @@
+import math
 import os
 import sqlite3
 from pathlib import Path
@@ -171,19 +172,52 @@ def merge_duplicate_products(products):
             query(c, 'DELETE FROM products WHERE id=?', (duplicate_id,))
 
 
-def edit_product(product_id, sku, name, category):
+def edit_product(product, name, category, stock, last_received):
     name = ' '.join(name.split())
     if not name:
         raise ValueError('Enter the product name.')
+    if stock is None or not math.isfinite(stock) or stock < 0:
+        raise ValueError('Enter a non-negative stock quantity.')
+    if last_received is None:
+        if product['latest_receipt_id'] is not None:
+            raise ValueError('Enter the last received quantity.')
+    elif not math.isfinite(last_received) or last_received <= 0:
+        raise ValueError('Last received must be greater than zero.')
+    product_id = product['id']
     with connect() as c:
         lock_product_catalog(c)
-        if any(product['id'] != product_id for product in matching_products(c, name, category)):
-            raise ValueError('A product with this name already exists in that category.')
-        updated = query(c, '''UPDATE products SET name=?,category=?
-                              WHERE id=? AND sku=? RETURNING id''',
-                        (name, category, product_id, sku)).fetchone()
-        if updated is None:
+        lock = ' FOR UPDATE' if DATABASE_URL else ''
+        current = query(c, 'SELECT name,category,stock FROM products WHERE id=? AND sku=?' + lock,
+                        (product_id, product['sku'])).fetchone()
+        if current is None:
             raise ValueError('That product no longer exists.')
+        receipt = query(c, """SELECT id,quantity FROM movements
+                              WHERE product_id=? AND kind IN ('Receipt', 'Customer return')
+                              ORDER BY id DESC LIMIT 1""", (product_id,)).fetchone()
+        receipt_id, receipt_quantity = (receipt['id'], receipt['quantity']) if receipt else (None, None)
+        if (any(current[field] != product[field] for field in ('name', 'category', 'stock'))
+                or (receipt_id, receipt_quantity) != (product['latest_receipt_id'], product['latest_received'])):
+            raise ValueError('This product changed. Reopen Edit and review the latest quantities.')
+        identity_changed = (product_name_key(name), category) != (
+            product_name_key(current['name']), current['category']
+        )
+        if identity_changed and any(p['id'] != product_id for p in matching_products(c, name, category)):
+            raise ValueError('A product with this name already exists in that category.')
+        if last_received != receipt_quantity:
+            if receipt_id is None:
+                query(c, """INSERT INTO movements(product_id,kind,quantity,rate,reference)
+                            VALUES(?,'Receipt',?,0,'Warehouse receipt correction')""", (product_id, last_received))
+            else:
+                query(c, 'UPDATE movements SET quantity=? WHERE id=?', (last_received, receipt_id))
+
+        receipt_change = (last_received or 0) - (receipt_quantity or 0)
+        adjustment = stock - (current['stock'] + receipt_change)
+        if not math.isclose(adjustment, 0, abs_tol=1e-9):
+            kind = 'Stock adjustment in' if adjustment > 0 else 'Stock adjustment out'
+            query(c, '''INSERT INTO movements(product_id,kind,quantity,rate,reference)
+                        VALUES(?,?,?,0,'Warehouse stock correction')''', (product_id, kind, abs(adjustment)))
+        query(c, 'UPDATE products SET name=?,category=?,stock=? WHERE id=?',
+              (name, category, stock, product_id))
 
 
 def add_product(sku, name, category, unit, quantity, *, source=None):
@@ -272,14 +306,14 @@ def receipt_history():
 
 STOCK_TOTALS = '''WITH movement_totals AS (
     SELECT product_id,
-           SUM(CASE WHEN kind IN ('Receipt', 'Customer return') THEN quantity ELSE 0 END) AS stock_in,
-           SUM(CASE WHEN kind IN ('Issue', 'Supplier return') THEN quantity ELSE 0 END) AS stock_out,
+           SUM(CASE WHEN kind IN ('Receipt', 'Customer return', 'Stock adjustment in') THEN quantity ELSE 0 END) AS stock_in,
+           SUM(CASE WHEN kind IN ('Issue', 'Supplier return', 'Stock adjustment out') THEN quantity ELSE 0 END) AS stock_out,
            MAX(CASE WHEN kind IN ('Receipt', 'Customer return') THEN id END) AS latest_receipt_id
     FROM movements GROUP BY product_id
 )
 SELECT p.id,p.sku,p.name,p.category,p.variant,p.specification,p.unit,p.minimum,p.stock,
        COALESCE(m.stock_in, 0) AS stock_in, COALESCE(m.stock_out, 0) AS stock_out,
-       latest.quantity AS latest_received
+       latest.id AS latest_receipt_id, latest.quantity AS latest_received
 FROM products p LEFT JOIN movement_totals m ON m.product_id=p.id
 LEFT JOIN movements latest ON latest.id=m.latest_receipt_id
 ORDER BY p.category,p.name,p.sku'''
