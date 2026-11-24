@@ -60,10 +60,42 @@ class InventoryTests(unittest.TestCase):
     def test_add_product_records_first_delivery_once(self):
         db.add_product('P2', 'New panel', 'Panels', 'Nos', 10)
         with self.assertRaises(db.IntegrityError):
-            db.add_product('P2', 'New panel', 'Panels', 'Nos', 10)
+            db.add_product('P2', 'Different panel', 'Panels', 'Nos', 10)
         self.assertEqual(db.rows("SELECT stock FROM products WHERE sku='P2'")[0]['stock'], 10)
         history = db.rows(db.STOCK_HISTORY)
         self.assertEqual([(row['Movement'], row['Quantity']) for row in history], [('Receipt', 10)])
+
+    def test_add_same_product_records_a_delivery_on_the_existing_row(self):
+        for name, category in [('Waaree panel', 'Panels'), ('Solar inverter', 'Inverters')]:
+            with self.subTest(category=category):
+                self.assertTrue(db.add_product(category, name, category, 'Nos', 17, source='Supplier A'))
+                self.assertFalse(db.add_product(category + '-NEW', '  ' + name.upper().replace(' ', '   '),
+                                                category, 'Nos', 6, source='Supplier B'))
+                with self.assertRaises(ValueError):
+                    db.add_product(category + '-OTHER', name, category, 'Kg', 2)
+                products = [p for p in db.overview_products() if p['name'] == name]
+                self.assertEqual([(p['sku'], p['stock'], p['latest_received']) for p in products],
+                                 [(category, 23, 6)])
+                receipts = [r for r in db.receipt_history() if r['Product'] == name]
+                self.assertEqual([(r['Quantity'], r['Received from']) for r in receipts],
+                                 [(6, 'Supplier B'), (17, 'Supplier A')])
+
+    def test_repeated_deliveries_show_latest_quantity_and_dispatch_only_reduces_stock(self):
+        db.add_product('W1', 'Waaree panel', 'Panels', 'Nos', 17, source='Waaree')
+        product = next(p for p in db.overview_products() if p['sku'] == 'W1')
+        self.assertEqual((product['stock'], product['latest_received']), (17, 17))
+
+        for quantity, expected_stock in [(6, 23), (2, 25)]:
+            db.move(product['id'], 'Receipt', quantity, 0, None, None, 'Receive stock', '', source='Distributor')
+            current = next(p for p in db.overview_products() if p['sku'] == 'W1')
+            self.assertEqual((current['stock'], current['latest_received']), (expected_stock, quantity))
+
+        db.move(product['id'], 'Issue', 4, 0, None, None, 'Send stock', '', destination='Job Site A')
+        current = next(p for p in db.overview_products() if p['sku'] == 'W1')
+        self.assertEqual((current['stock'], current['latest_received']), (21, 2))
+        self.assertEqual([(r['Quantity'], r['Received from']) for r in db.receipt_history()],
+                         [(2, 'Distributor'), (6, 'Distributor'), (17, 'Waaree')])
+        self.assertEqual(db.dispatch_history()[0]['Sent to'], 'Job Site A')
 
     def test_delete_mistaken_product_removes_only_its_first_delivery(self):
         db.add_product('NEW', 'Mistaken entry', 'Panels', 'Nos', 8)

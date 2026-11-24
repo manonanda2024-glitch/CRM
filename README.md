@@ -12,7 +12,7 @@ python -m streamlit run app.py
 
 Open http://localhost:8501. Local data lives in `data/solar.db`. Without APP_PASSWORD, local development does not require login.
 
-**Warehouse stock** shows quantities currently in the warehouse. It updates when you save a stock change or reopen the page.
+**Warehouse stock** shows the current balance and the most recent receipt quantity for each product. It updates when you save a stock change or reopen the page. Sending stock reduces the balance and preserves the last received quantity.
 
 ## Deploy Streamlit with Render PostgreSQL
 
@@ -35,9 +35,10 @@ Render Free PostgreSQL expires after 30 days and has no managed backups. Export 
 
 ## Workflow
 
-1. Open **Add product**. Enter its name, category, how you count it, and how many came in. Saving also records the first delivery.
-2. When stock leaves, open **Send stock** and enter the quantity and the customer or job site. The destination appears under **Sent to**.
-3. On **Warehouse stock**, use **Correct a product name** to fix a typo, or **Delete** next to a mistaken product. Deleting requires confirmation and removes its first delivery, if present. Products with later stock activity can only be renamed.
+1. Open **Add product**. Enter its name, category, how you count it, and how many came in. If the name and category match an existing product, saving adds the delivery to its warehouse row. Capitalization and extra spaces are ignored, and the unit must match.
+2. For another delivery of an existing product, open **Receive stock**, select the product, and enter the new quantity and supplier or person. Each delivery appears under **Received from**.
+3. When stock leaves, open **Send stock** and enter the quantity and the customer or job site. The destination appears under **Sent to**.
+4. On **Warehouse stock**, search by product name, category, or SKU. Use **Edit** on a product row to change its name or category. **Delete** requires confirmation and removes the product's first delivery, if present. Products with later stock activity cannot be deleted.
 
 In pgAdmin, open **Schemas → public → Views → warehouse_products** for a stock list with just the product, category, quantity in stock, and unit.
 

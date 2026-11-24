@@ -68,7 +68,7 @@ SCHEMA = '''
           product_id INTEGER NOT NULL REFERENCES products(id), kind TEXT NOT NULL,
           quantity REAL NOT NULL CHECK(quantity>0), rate REAL NOT NULL CHECK(rate>=0),
           contact_id INTEGER REFERENCES contacts(id), project_id INTEGER REFERENCES projects(id),
-          reference TEXT NOT NULL, notes TEXT, destination TEXT);
+          reference TEXT NOT NULL, notes TEXT, destination TEXT, source TEXT);
 '''
 
 
@@ -80,11 +80,11 @@ def init():
                    AND to_regclass('contacts') IS NOT NULL
                    AND to_regclass('projects') IS NOT NULL
                    AND strpos(pg_get_viewdef(to_regclass('warehouse_products')), 'Meters') > 0
-                   AND EXISTS (
-                       SELECT 1 FROM pg_attribute
+                   AND (
+                       SELECT COUNT(*) FROM pg_attribute
                        WHERE attrelid = to_regclass('movements')
-                         AND attname = 'destination' AND NOT attisdropped
-                   ) AS ready
+                         AND attname IN ('destination', 'source') AND NOT attisdropped
+                   ) = 2 AS ready
             ''').fetchone()['ready']
             if ready:
                 return
@@ -97,6 +97,7 @@ def init():
             for statement in schema.strip().rstrip(';').split(';'):
                 c.execute(statement)
             c.execute('ALTER TABLE movements ADD COLUMN IF NOT EXISTS destination TEXT')
+            c.execute('ALTER TABLE movements ADD COLUMN IF NOT EXISTS source TEXT')
             c.execute('''
                 CREATE OR REPLACE VIEW warehouse_products AS
                 SELECT name AS product, category, stock AS in_stock,
@@ -109,6 +110,8 @@ def init():
             columns = {column['name'] for column in c.execute('PRAGMA table_info(movements)')}
             if 'destination' not in columns:
                 c.execute('ALTER TABLE movements ADD COLUMN destination TEXT')
+            if 'source' not in columns:
+                c.execute('ALTER TABLE movements ADD COLUMN source TEXT')
 
 
 def query(connection, sql, params=()):
@@ -128,10 +131,57 @@ def execute(sql, params=()):
         return query(c, sql, params).lastrowid
 
 
-def add_product(sku, name, category, unit, quantity):
+def lock_product_catalog(connection):
+    if DATABASE_URL:
+        connection.execute('SELECT pg_advisory_xact_lock(560941805)')
+    else:
+        connection.execute('BEGIN IMMEDIATE')
+
+
+def matching_products(connection, name, category):
+    candidates = query(connection, 'SELECT id,name,unit FROM products WHERE category=?', (category,))
+    return [product for product in candidates
+            if ' '.join(product['name'].split()).casefold() == name.casefold()]
+
+
+def edit_product(product_id, sku, name, category):
+    name = ' '.join(name.split())
+    if not name:
+        raise ValueError('Enter the product name.')
+    with connect() as c:
+        lock_product_catalog(c)
+        if any(product['id'] != product_id for product in matching_products(c, name, category)):
+            raise ValueError('A product with this name already exists in that category.')
+        updated = query(c, '''UPDATE products SET name=?,category=?
+                              WHERE id=? AND sku=? RETURNING id''',
+                        (name, category, product_id, sku)).fetchone()
+        if updated is None:
+            raise ValueError('That product no longer exists.')
+
+
+def add_product(sku, name, category, unit, quantity, *, source=None):
     if quantity is None or quantity <= 0:
         raise ValueError('Enter how many came in.')
+    name = ' '.join(name.split())
+    if not name:
+        raise ValueError('Enter the product name.')
     with connect() as c:
+        lock_product_catalog(c)
+        matches = matching_products(c, name, category)
+        if len(matches) > 1:
+            raise ValueError('More than one warehouse row has this product name. Use Receive stock to select the correct row.')
+        if matches:
+            product = matches[0]
+            if unit != product['unit']:
+                raise ValueError(f"This product already uses {product['unit']}. Select the same unit or use Receive stock.")
+            updated = query(c, '''UPDATE products SET stock=stock+?
+                                  WHERE id=? AND name=? AND unit=? RETURNING id''',
+                            (quantity, product['id'], product['name'], unit)).fetchone()
+            if updated is None:
+                raise ValueError('The matching product changed. Try again.')
+            query(c, '''INSERT INTO movements(product_id,kind,quantity,rate,reference,source)
+                        VALUES(?,'Receipt',?,0,'Receive stock',?)''', (product['id'], quantity, source))
+            return False
         insert = '''INSERT INTO products(sku,name,category,variant,unit,cost,price,minimum,stock)
                     VALUES(?,?,?,'Unspecified',?,0,0,0,?)'''
         params = (sku, name, category, unit, quantity)
@@ -139,8 +189,9 @@ def add_product(sku, name, category, unit, quantity):
             product_id = query(c, insert + ' RETURNING id', params).fetchone()['id']
         else:
             product_id = query(c, insert, params).lastrowid
-        query(c, '''INSERT INTO movements(product_id,kind,quantity,rate,reference)
-                    VALUES(?,'Receipt',?,0,'First delivery')''', (product_id, quantity))
+        query(c, '''INSERT INTO movements(product_id,kind,quantity,rate,reference,source)
+                    VALUES(?,'Receipt',?,0,'First delivery',?)''', (product_id, quantity, source))
+        return True
 
 
 def delete_mistaken_product(product_id, sku):
@@ -169,7 +220,9 @@ STOCK_HISTORY_SELECT = '''
     SELECT m.created AS "Time (UTC)", p.name AS "Product", m.kind AS "Movement",
            m.quantity AS "Quantity", p.unit AS "Unit",
            CASE WHEN m.kind IN ('Issue', 'Supplier return')
-                THEN COALESCE(m.destination, j.name, c.name, 'Not recorded') END AS "Sent to"
+                THEN COALESCE(m.destination, j.name, c.name, 'Not recorded') END AS "Sent to",
+           CASE WHEN m.kind IN ('Receipt', 'Customer return')
+                THEN COALESCE(m.source, c.name, 'Not recorded') END AS "Received from"
     FROM movements m JOIN products p ON p.id=m.product_id
     LEFT JOIN projects j ON j.id=m.project_id LEFT JOIN contacts c ON c.id=m.contact_id
 '''
@@ -183,15 +236,25 @@ def dispatch_history():
     """)
 
 
+def receipt_history():
+    return rows(STOCK_HISTORY_SELECT + """
+        WHERE m.kind IN ('Receipt', 'Customer return')
+        ORDER BY m.id DESC
+    """)
+
+
 STOCK_TOTALS = '''WITH movement_totals AS (
     SELECT product_id,
            SUM(CASE WHEN kind IN ('Receipt', 'Customer return') THEN quantity ELSE 0 END) AS stock_in,
-           SUM(CASE WHEN kind IN ('Issue', 'Supplier return') THEN quantity ELSE 0 END) AS stock_out
+           SUM(CASE WHEN kind IN ('Issue', 'Supplier return') THEN quantity ELSE 0 END) AS stock_out,
+           MAX(CASE WHEN kind IN ('Receipt', 'Customer return') THEN id END) AS latest_receipt_id
     FROM movements GROUP BY product_id
 )
 SELECT p.id,p.sku,p.name,p.category,p.variant,p.specification,p.unit,p.minimum,p.stock,
-       COALESCE(m.stock_in, 0) AS stock_in, COALESCE(m.stock_out, 0) AS stock_out
+       COALESCE(m.stock_in, 0) AS stock_in, COALESCE(m.stock_out, 0) AS stock_out,
+       latest.quantity AS latest_received
 FROM products p LEFT JOIN movement_totals m ON m.product_id=p.id
+LEFT JOIN movements latest ON latest.id=m.latest_receipt_id
 ORDER BY p.category,p.name,p.sku'''
 
 
@@ -217,7 +280,7 @@ def inventory_snapshot():
 
     return products, active_projects, [totals_by_unit[unit] for unit in sorted(totals_by_unit)], activity
 
-def move(product_id, kind, quantity, rate, contact_id, project_id, reference, notes, *, destination=None):
+def move(product_id, kind, quantity, rate, contact_id, project_id, reference, notes, *, destination=None, source=None):
     if kind not in ('Receipt', 'Issue', 'Customer return', 'Supplier return'):
         raise ValueError('Invalid movement type.')
     if quantity <= 0 or rate < 0 or not reference.strip():
@@ -230,6 +293,6 @@ def move(product_id, kind, quantity, rate, contact_id, project_id, reference, no
                            (change, product_id, change))
         if result.rowcount != 1:
             raise ValueError('Insufficient stock. Refresh and check available quantity.')
-        query(c, '''INSERT INTO movements(product_id,kind,quantity,rate,contact_id,project_id,reference,notes,destination)
-                     VALUES(?,?,?,?,?,?,?,?,?)''',
-                  (product_id, kind, quantity, rate, contact_id, project_id, reference.strip(), notes, destination))
+        query(c, '''INSERT INTO movements(product_id,kind,quantity,rate,contact_id,project_id,reference,notes,destination,source)
+                     VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                  (product_id, kind, quantity, rate, contact_id, project_id, reference.strip(), notes, destination, source))

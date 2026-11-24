@@ -141,11 +141,13 @@ st.sidebar.caption('SOLAR ENERGY · OPERATIONS')
 pages = {
     'Overview': 'Warehouse stock',
     'Inventory': 'Add product',
+    'Receipt': 'Receive stock',
     'Issue': 'Send stock',
+    'Sources': 'Received from',
     'Destinations': 'Sent to',
 }
 unit_labels = {'Nos': 'Pieces', 'Metres': 'Meters'}
-if st.session_state.pop('return_to_overview', False) or st.session_state.get('menu_page') == 'Receipt':
+if st.session_state.pop('return_to_overview', False):
     st.session_state.menu_page = 'Overview'
 page = st.sidebar.radio('Menu', list(pages), format_func=pages.get, key='menu_page')
 st.sidebar.divider()
@@ -196,7 +198,7 @@ def table(data):
 @st.dialog('Delete product')
 def confirm_product_deletion(product):
     st.text(product['name'])
-    st.caption('Deleting also removes the first delivery. Products with later stock activity can only be renamed.')
+    st.caption('Deleting also removes the first delivery. Products with later stock activity cannot be deleted.')
     confirmed = st.checkbox('Delete this product and its first delivery')
     if st.button('Delete product', type='primary', disabled=not confirmed):
         try:
@@ -209,67 +211,76 @@ def confirm_product_deletion(product):
             show_saved_stock('Mistaken product deleted.')
 
 
+@st.dialog('Edit product')
+def edit_product_details(product):
+    categories = list(dict.fromkeys([*db.CATEGORIES, product['category']]))
+    with st.form(f"edit-product-{product['id']}"):
+        name = st.text_input('Product name', value=product['name'])
+        category = st.selectbox('Category', categories, index=categories.index(product['category']))
+        if st.form_submit_button('Save changes', type='primary'):
+            try:
+                db.edit_product(product['id'], product['sku'], name, category)
+            except ValueError as exc:
+                st.error(str(exc))
+            except db.IntegrityError:
+                st.error('Could not save product changes. Try again.')
+            else:
+                show_saved_stock('Product updated.')
+
+
 def inventory_dashboard():
+    search = st.text_input('Search warehouse stock', placeholder='Product name, category, or SKU')
     products = db.overview_products()
+    if not products:
+        st.info('Go to Add product to get started.')
+        return
+    terms = search.casefold().split()
+    products = [
+        product for product in products
+        if all(term in ' '.join((product['name'], product['category'], product['sku'])).casefold()
+               for term in terms)
+    ]
+    if not products:
+        st.info('No products match your search.')
+        return
     groups = [
         ('Panels', [p for p in products if p['category'] == 'Panels']),
         ('Inverters', [p for p in products if p['category'] == 'Inverters']),
         ('Other products', [p for p in products if p['category'] not in ('Panels', 'Inverters')]),
     ]
-    if not products:
-        st.info('Go to Add product to get started.')
     for heading, group in groups:
         if group:
             st.subheader(heading)
-            widths = [3, 2, 1.4]
+            widths = [3, 2, 2, 1, 1.2]
             with st.container(border=True):
                 headers = st.columns(widths)
-                for column, label in zip(headers, ('Product', 'In stock')):
+                for column, label in zip(headers, ('Product', 'In stock', 'Last received')):
                     column.markdown(f'**{label}**')
                 for product in group:
-                    name, stock, action = st.columns(widths, vertical_alignment='center')
+                    name, stock, received, edit, delete = st.columns(widths, vertical_alignment='center')
                     unit = unit_labels.get(product['unit'], product['unit'])
                     name.text(product['name'])
                     stock.text(f"{product['stock']:g} {unit}")
-                    if action.button('Delete', key=f"delete-product-{product['id']}",
+                    latest_quantity = product['latest_received']
+                    received.text(f'{latest_quantity:g} {unit}' if latest_quantity is not None else '—')
+                    if edit.button('Edit', key=f"edit-product-{product['id']}", help=f"Edit {product['name']}"):
+                        edit_product_details(product)
+                    if delete.button('Delete', key=f"delete-product-{product['id']}",
                                      help=f"Delete {product['name']}"):
                         confirm_product_deletion(product)
 
 
-def sent_to():
-    shipments = db.dispatch_history()
-    if shipments:
+def show_movement_history(records, party_column, empty_message):
+    if records:
         table([
-            {column: shipment[column] for column in ('Sent to', 'Product', 'Quantity', 'Unit', 'Time (UTC)')}
-            for shipment in shipments
+            {column: row[column] for column in (party_column, 'Product', 'Quantity', 'Unit', 'Time (UTC)')}
+            for row in records
         ])
     else:
-        st.info('Stock sent to a customer or job site will appear here.')
+        st.info(empty_message)
 
 
-def correct_product():
-    products = db.rows('SELECT id,sku,name,stock FROM products ORDER BY name,sku')
-    if not products:
-        st.info('There are no products to correct.')
-    else:
-        options = {p['id']: p for p in products}
-        product_id = st.selectbox('Product', list(options),
-                                  format_func=lambda pid: f"{options[pid]['name']} · {options[pid]['sku']}")
-        product = options[product_id]
-        with st.form(f'rename-{product_id}'):
-            name = st.text_input('Correct product name', value=product['name']).strip()
-            if st.form_submit_button('Save name', type='primary'):
-                if not name:
-                    st.error('Enter the product name.')
-                elif not db.rows('UPDATE products SET name=? WHERE id=? AND sku=? RETURNING id',
-                                 (name, product_id, product['sku'])):
-                    st.error('That product no longer exists.')
-                else:
-                    show_saved_stock('Product name updated.')
 if page == 'Overview':
-    with st.expander('Correct a product name', key='stock-corrections', on_change='rerun') as corrections:
-        if corrections.open:
-            correct_product()
     inventory_dashboard()
 
 elif page == 'Inventory':
@@ -279,6 +290,7 @@ elif page == 'Inventory':
         unit = st.selectbox('Count in', ['Nos', 'Metres', 'Sets', 'Kg', 'Rolls', 'Bundles'],
                            format_func=lambda unit: unit_labels.get(unit, unit))
         quantity = st.number_input('How many came in? *', min_value=0.01, value=None, placeholder='Enter quantity')
+        source = st.text_input('Received from (optional)', placeholder='Supplier or person').strip()
         if st.form_submit_button('Add product', type='primary'):
             if not name.strip():
                 st.error('Enter the product name.')
@@ -289,16 +301,24 @@ elif page == 'Inventory':
                 name_code = re.sub(r'[\W_]+', '-', name.strip().upper()).strip('-')[:32].rstrip('-') or 'PRODUCT'
                 sku = f'{prefix}-{name_code}-{uuid4().hex[:12].upper()}'
                 try:
-                    db.add_product(sku, name.strip(), category, unit, quantity)
+                    created = db.add_product(sku, name, category, unit, quantity, source=source or None)
+                except ValueError as exc:
+                    st.error(str(exc))
                 except db.IntegrityError:
                     st.error('Could not add the product. Try again.')
                 else:
-                    show_saved_stock(f'Product added with {quantity:g} in stock.')
+                    message = (f'Product added with {quantity:g} in stock.' if created
+                               else f'Added {quantity:g} to existing stock.')
+                    show_saved_stock(message)
+
+elif page == 'Sources':
+    show_movement_history(db.receipt_history(), 'Received from', 'Stock receipts will appear here.')
 
 elif page == 'Destinations':
-    sent_to()
+    show_movement_history(db.dispatch_history(), 'Sent to', 'Stock sent to a customer or job site will appear here.')
 
-elif page == 'Issue':
+elif page in ('Receipt', 'Issue'):
+    receiving = page == 'Receipt'
     products = db.rows('SELECT id,sku,name,unit,stock FROM products ORDER BY name,sku')
     if not products:
         st.info('Go to Add product first.')
@@ -313,20 +333,29 @@ elif page == 'Issue':
         unit = unit_labels.get(product['unit'], product['unit']).lower()
         st.caption(f"In stock: {product['stock']:g} {unit}")
         with st.form(f'movement-{page}', clear_on_submit=True):
-            quantity = st.number_input('How many are going out?', min_value=0.01, value=None,
+            question = 'How many came in?' if receiving else 'How many are going out?'
+            quantity = st.number_input(question, min_value=0.01, value=None,
                                        placeholder=f'Enter quantity in {unit}')
-            destination = st.text_input('Where is it going? *', placeholder='Customer name or job site').strip()
+            if receiving:
+                source = st.text_input('Received from *', placeholder='Supplier or person').strip()
+                destination = None
+            else:
+                source = None
+                destination = st.text_input('Where is it going? *', placeholder='Customer name or job site').strip()
             if st.form_submit_button(pages[page], type='primary'):
                 if quantity is None:
                     st.error('Enter the quantity.')
-                elif not destination:
-                    st.error('Enter where the stock is going.')
+                elif not (source or destination):
+                    st.error('Enter who sent the stock.' if receiving else 'Enter where the stock is going.')
                 else:
                     try:
                         db.move(product_id, page, quantity, 0, None, None, pages[page], '',
-                                destination=destination)
-                    except (ValueError, db.IntegrityError):
-                        st.error('Could not save the stock change. Check how much is in the warehouse.')
+                                destination=destination, source=source)
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    except db.IntegrityError:
+                        st.error('Could not save the stock change. Reopen the page and try again.')
                     else:
-                        show_saved_stock(f'Stock sent to {destination}.')
+                        message = f'Stock received from {source}.' if receiving else f'Stock sent to {destination}.'
+                        show_saved_stock(message)
 
