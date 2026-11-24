@@ -257,16 +257,22 @@ def confirm_product_merge(products):
 
 
 def inventory_dashboard():
-    search = st.text_input('Search warehouse stock', placeholder='Product name, category, or SKU')
     products = db.overview_products()
     if not products:
         st.info('Go to Add product to get started.')
         return
+    names = {}
+    for product in sorted(products, key=lambda p: db.product_name_key(p['name'])):
+        names.setdefault(db.product_name_key(product['name']), product['name'])
+    search = st.selectbox('Search warehouse stock', list(names.values()), index=None,
+                          key='warehouse-stock-search', accept_new_options=True, filter_mode='contains',
+                          placeholder='Product name, category, or SKU',
+                          help='Select a suggested product or press Enter to search for your text.')
     duplicates = {}
     for product in products:
         key = (db.product_name_key(product['name']), product['category'], product['unit'])
         duplicates.setdefault(key, []).append(product)
-    terms = search.casefold().split()
+    terms = (search or '').casefold().split()
     products = [
         product for product in products
         if all(term in ' '.join((product['name'], product['category'], product['sku'])).casefold()
