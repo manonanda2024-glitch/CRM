@@ -64,13 +64,18 @@ SCHEMA = '''
         CREATE TABLE IF NOT EXISTS projects (
           id INTEGER PRIMARY KEY, name TEXT NOT NULL, customer_id INTEGER REFERENCES contacts(id),
           capacity REAL, stage TEXT, value REAL, notes TEXT);
+'''
+MOVEMENTS_SCHEMA = '''
         CREATE TABLE IF NOT EXISTS movements (
           id INTEGER PRIMARY KEY, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           product_id INTEGER NOT NULL REFERENCES products(id), kind TEXT NOT NULL,
-          quantity REAL NOT NULL CHECK(quantity>0), rate REAL NOT NULL CHECK(rate>=0),
+          quantity REAL NOT NULL, rate REAL NOT NULL CHECK(rate>=0),
           contact_id INTEGER REFERENCES contacts(id), project_id INTEGER REFERENCES projects(id),
-          reference TEXT NOT NULL, notes TEXT, destination TEXT, source TEXT);
+          reference TEXT NOT NULL, notes TEXT, destination TEXT, source TEXT,
+          CONSTRAINT movements_receipt_quantity_check
+              CHECK(quantity>0 OR (quantity=0 AND kind IN ('Receipt', 'Customer return'))));
 '''
+SCHEMA += MOVEMENTS_SCHEMA
 
 
 def init():
@@ -87,7 +92,12 @@ def init():
                          AND attname IN ('destination', 'source') AND NOT attisdropped
                    ) = 2 AS ready
             ''').fetchone()['ready']
-            if ready:
+            receipt_constraint_sql = """
+                SELECT 1 FROM pg_constraint
+                WHERE conrelid = to_regclass('movements')
+                  AND conname = 'movements_receipt_quantity_check'
+            """
+            if ready and c.execute(receipt_constraint_sql).fetchone():
                 return
 
             # Serialize first-time setup across app sessions and the import command.
@@ -99,6 +109,10 @@ def init():
                 c.execute(statement)
             c.execute('ALTER TABLE movements ADD COLUMN IF NOT EXISTS destination TEXT')
             c.execute('ALTER TABLE movements ADD COLUMN IF NOT EXISTS source TEXT')
+            if not c.execute(receipt_constraint_sql).fetchone():
+                c.execute('ALTER TABLE movements DROP CONSTRAINT IF EXISTS movements_quantity_check')
+                c.execute("""ALTER TABLE movements ADD CONSTRAINT movements_receipt_quantity_check
+                             CHECK(quantity>0 OR (quantity=0 AND kind IN ('Receipt', 'Customer return')))""")
             c.execute('''
                 CREATE OR REPLACE VIEW warehouse_products AS
                 SELECT name AS product, category, stock AS in_stock,
@@ -113,6 +127,21 @@ def init():
                 c.execute('ALTER TABLE movements ADD COLUMN destination TEXT')
             if 'source' not in columns:
                 c.execute('ALTER TABLE movements ADD COLUMN source TEXT')
+            movement_schema = c.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='movements'"
+            ).fetchone()['sql']
+            if 'movements_receipt_quantity_check' not in movement_schema:
+                indexes_and_triggers = c.execute("""
+                    SELECT sql FROM sqlite_master
+                    WHERE tbl_name='movements' AND type IN ('index', 'trigger') AND sql IS NOT NULL
+                """).fetchall()
+                c.execute('ALTER TABLE movements RENAME TO movements_before_receipt_correction')
+                c.execute(MOVEMENTS_SCHEMA)
+                fields = 'id,created,product_id,kind,quantity,rate,contact_id,project_id,reference,notes,destination,source'
+                c.execute(f'INSERT INTO movements({fields}) SELECT {fields} FROM movements_before_receipt_correction')
+                c.execute('DROP TABLE movements_before_receipt_correction')
+                for item in indexes_and_triggers:
+                    c.execute(item['sql'])
 
 
 def query(connection, sql, params=()):
@@ -181,8 +210,8 @@ def edit_product(product, name, category, stock, last_received):
     if last_received is None:
         if product['latest_receipt_id'] is not None:
             raise ValueError('Enter the last received quantity.')
-    elif not math.isfinite(last_received) or last_received <= 0:
-        raise ValueError('Last received must be greater than zero.')
+    elif not math.isfinite(last_received) or last_received < 0:
+        raise ValueError('Last received must be non-negative.')
     product_id = product['id']
     with connect() as c:
         lock_product_catalog(c)

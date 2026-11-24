@@ -109,8 +109,27 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual([r['Quantity'] for r in db.dispatch_history()], [4])
         with self.assertRaises(ValueError):
             db.edit_product(before, 'Panel', 'Panels', 8, 10)
-        db.edit_product(updated, 'Panel', 'Panels', 0, 12)
+        db.edit_product(updated, 'Panel', 'Panels', 5, 0)
+        corrected = db.overview_products()[0]
+        self.assertEqual((corrected['stock'], corrected['latest_received']), (5, 0))
+        self.assertEqual(db.receipt_history()[0]['Quantity'], 0)
+        db.edit_product(corrected, 'Panel', 'Panels', 0, 0)
         self.assertEqual(db.overview_products()[0]['stock'], 0)
+
+    def test_legacy_database_keeps_receipts_and_accepts_zero_corrections(self):
+        db.DB_PATH = Path(self.temp.name) / 'legacy.db'
+        legacy_schema = db.SCHEMA.replace(
+            "CONSTRAINT movements_receipt_quantity_check\n"
+            "              CHECK(quantity>0 OR (quantity=0 AND kind IN ('Receipt', 'Customer return')))",
+            'CHECK(quantity>0)',
+        )
+        with db.connect() as connection:
+            connection.executescript(legacy_schema)
+        db.add_product('OLD', 'Existing panel', 'Panels', 'Nos', 8, source='Supplier')
+        db.init()
+        product = db.overview_products()[0]
+        db.edit_product(product, 'Existing panel', 'Panels', 8, 0)
+        self.assertEqual([(r['Quantity'], r['Received from']) for r in db.receipt_history()], [(0, 'Supplier')])
 
     def test_merge_duplicates_preserves_current_balance_and_movement_history(self):
         db.move(self.pid, 'Receipt', 36, 0, None, None, 'Receive stock', '', source='Supplier A')
