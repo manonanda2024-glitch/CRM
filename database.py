@@ -201,7 +201,17 @@ def merge_duplicate_products(products):
             query(c, 'DELETE FROM products WHERE id=?', (duplicate_id,))
 
 
-def edit_product(product, name, category, stock, last_received):
+BEFORE_RECEIPT_REFERENCE = 'Warehouse balance before receipt #'
+
+
+def record_stock_adjustment(connection, product_id, change, reference):
+    if not math.isclose(change, 0, abs_tol=1e-9):
+        kind = 'Stock adjustment in' if change > 0 else 'Stock adjustment out'
+        query(connection, '''INSERT INTO movements(product_id,kind,quantity,rate,reference)
+                             VALUES(?,?,?,0,?)''', (product_id, kind, abs(change), reference))
+
+
+def edit_product(product, name, category, stock, last_received, *, stock_before_receipt=None):
     name = ' '.join(name.split())
     if not name:
         raise ValueError('Enter the product name.')
@@ -212,39 +222,47 @@ def edit_product(product, name, category, stock, last_received):
             raise ValueError('Enter the last received quantity.')
     elif not math.isfinite(last_received) or last_received < 0:
         raise ValueError('Last received must be non-negative.')
+    if stock_before_receipt is not None:
+        if not math.isfinite(stock_before_receipt) or stock_before_receipt < 0:
+            raise ValueError('Stock before last receipt must be non-negative.')
+        if last_received is None:
+            raise ValueError('Enter Last received to set the stock before that receipt.')
     product_id = product['id']
     with connect() as c:
         lock_product_catalog(c)
         lock = ' FOR UPDATE' if DATABASE_URL else ''
-        current = query(c, 'SELECT name,category,stock FROM products WHERE id=? AND sku=?' + lock,
-                        (product_id, product['sku'])).fetchone()
-        if current is None:
+        locked = query(c, 'SELECT id FROM products WHERE id=? AND sku=?' + lock,
+                       (product_id, product['sku'])).fetchone()
+        if locked is None:
             raise ValueError('That product no longer exists.')
-        receipt = query(c, """SELECT id,quantity FROM movements
-                              WHERE product_id=? AND kind IN ('Receipt', 'Customer return')
-                              ORDER BY id DESC LIMIT 1""", (product_id,)).fetchone()
-        receipt_id, receipt_quantity = (receipt['id'], receipt['quantity']) if receipt else (None, None)
-        if (any(current[field] != product[field] for field in ('name', 'category', 'stock'))
-                or (receipt_id, receipt_quantity) != (product['latest_receipt_id'], product['latest_received'])):
+        current = query(c, f'SELECT * FROM ({STOCK_TOTALS}) AS snapshot WHERE id=?', (product_id,)).fetchone()
+        fields = ('name', 'category', 'stock', 'latest_receipt_id', 'latest_received', 'stock_before_receipt')
+        if any(current[field] != product[field] for field in fields):
             raise ValueError('This product changed. Reopen Edit and review the latest quantities.')
         identity_changed = (product_name_key(name), category) != (
             product_name_key(current['name']), current['category']
         )
         if identity_changed and any(p['id'] != product_id for p in matching_products(c, name, category)):
             raise ValueError('A product with this name already exists in that category.')
+        receipt_id, receipt_quantity = current['latest_receipt_id'], current['latest_received']
         if last_received != receipt_quantity:
             if receipt_id is None:
-                query(c, """INSERT INTO movements(product_id,kind,quantity,rate,reference)
-                            VALUES(?,'Receipt',?,0,'Warehouse receipt correction')""", (product_id, last_received))
+                receipt_id = query(c, """INSERT INTO movements(product_id,kind,quantity,rate,reference)
+                                        VALUES(?,'Receipt',?,0,'Warehouse receipt correction') RETURNING id""",
+                                   (product_id, last_received)).fetchone()['id']
             else:
                 query(c, 'UPDATE movements SET quantity=? WHERE id=?', (last_received, receipt_id))
 
         receipt_change = (last_received or 0) - (receipt_quantity or 0)
-        adjustment = stock - (current['stock'] + receipt_change)
-        if not math.isclose(adjustment, 0, abs_tol=1e-9):
-            kind = 'Stock adjustment in' if adjustment > 0 else 'Stock adjustment out'
-            query(c, '''INSERT INTO movements(product_id,kind,quantity,rate,reference)
-                        VALUES(?,?,?,0,'Warehouse stock correction')''', (product_id, kind, abs(adjustment)))
+        before_change = 0
+        if stock_before_receipt is not None:
+            previous = current['stock_before_receipt']
+            if previous is None:
+                previous = current['stock']
+            before_change = stock_before_receipt - previous
+            record_stock_adjustment(c, product_id, before_change, f'{BEFORE_RECEIPT_REFERENCE}{receipt_id}')
+        adjustment = stock - (current['stock'] + receipt_change + before_change)
+        record_stock_adjustment(c, product_id, adjustment, 'Warehouse stock correction')
         query(c, 'UPDATE products SET name=?,category=?,stock=? WHERE id=?',
               (name, category, stock, product_id))
 
@@ -333,7 +351,7 @@ def receipt_history():
     """)
 
 
-STOCK_TOTALS = '''WITH movement_totals AS (
+STOCK_TOTALS = f'''WITH movement_totals AS (
     SELECT product_id,
            SUM(CASE WHEN kind IN ('Receipt', 'Customer return', 'Stock adjustment in') THEN quantity ELSE 0 END) AS stock_in,
            SUM(CASE WHEN kind IN ('Issue', 'Supplier return', 'Stock adjustment out') THEN quantity ELSE 0 END) AS stock_out,
@@ -346,6 +364,7 @@ STOCK_TOTALS = '''WITH movement_totals AS (
                     ELSE 0 END) AS net_change
     FROM movements m JOIN movement_totals totals ON totals.product_id=m.product_id
     WHERE m.id > totals.latest_receipt_id
+      AND m.reference <> ('{BEFORE_RECEIPT_REFERENCE}' || CAST(totals.latest_receipt_id AS TEXT))
     GROUP BY m.product_id
 )
 SELECT p.id,p.sku,p.name,p.category,p.variant,p.specification,p.unit,p.minimum,p.stock,

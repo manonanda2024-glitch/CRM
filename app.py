@@ -219,9 +219,10 @@ def edit_product_details(product):
         category = st.selectbox('Category', categories, index=categories.index(product['category']))
         unit = unit_labels.get(product['unit'], product['unit'])
         previous_stock = product['stock_before_receipt']
-        st.text_input('Stock before last receipt',
-                      value=f'{previous_stock:g} {unit}' if previous_stock is not None else '—',
-                      disabled=True, help='Calculated from the warehouse movement history.')
+        stock_before_receipt = st.number_input(
+            'Stock before last receipt', value=float(previous_stock) if previous_stock is not None else None,
+            help=f'Warehouse balance in {unit} immediately before the latest receipt.',
+        )
         received = product['latest_received']
         last_received = st.number_input('Last received', min_value=0.0,
                                         value=float(received) if received is not None else None,
@@ -230,7 +231,8 @@ def edit_product_details(product):
                                 help=f'Enter the final warehouse balance in {unit}.')
         if st.form_submit_button('Save changes', type='primary'):
             try:
-                db.edit_product(product, name, category, stock, last_received)
+                db.edit_product(product, name, category, stock, last_received,
+                                stock_before_receipt=stock_before_receipt)
             except ValueError as exc:
                 st.error(str(exc))
             except db.IntegrityError:
