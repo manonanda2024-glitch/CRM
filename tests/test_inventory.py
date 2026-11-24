@@ -97,6 +97,23 @@ class InventoryTests(unittest.TestCase):
                          [(2, 'Distributor'), (6, 'Distributor'), (17, 'Waaree')])
         self.assertEqual(db.dispatch_history()[0]['Sent to'], 'Job Site A')
 
+    def test_merge_duplicates_preserves_current_balance_and_movement_history(self):
+        db.move(self.pid, 'Receipt', 36, 0, None, None, 'Receive stock', '', source='Supplier A')
+        db.move(self.pid, 'Issue', 15, 0, None, None, 'Send stock', '', destination='Job Site A')
+        duplicate_id = db.execute(
+            "INSERT INTO products(sku,name,category,variant,unit,cost,price,minimum) "
+            "VALUES('P2','  PANEL  ','Panels','TOPCon','Nos',100,120,2)"
+        )
+        db.move(duplicate_id, 'Receipt', 36, 0, None, None, 'Receive stock', '', source='Supplier B')
+        products = db.overview_products()
+        db.merge_duplicate_products(products)
+        self.assertEqual([(p['id'], p['stock'], p['latest_received']) for p in db.overview_products()],
+                         [(self.pid, 57, 36)])
+        self.assertEqual([m['Received from'] for m in db.receipt_history()], ['Supplier B', 'Supplier A'])
+        self.assertEqual(db.dispatch_history()[0]['Sent to'], 'Job Site A')
+        with self.assertRaises(ValueError):
+            db.merge_duplicate_products(products)
+
     def test_delete_mistaken_product_removes_only_its_first_delivery(self):
         db.add_product('NEW', 'Mistaken entry', 'Panels', 'Nos', 8)
         pid = db.rows("SELECT id FROM products WHERE sku='NEW'")[0]['id']

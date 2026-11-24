@@ -138,10 +138,37 @@ def lock_product_catalog(connection):
         connection.execute('BEGIN IMMEDIATE')
 
 
+def product_name_key(name):
+    return ' '.join(name.split()).casefold()
+
+
 def matching_products(connection, name, category):
     candidates = query(connection, 'SELECT id,name,unit FROM products WHERE category=?', (category,))
     return [product for product in candidates
-            if ' '.join(product['name'].split()).casefold() == name.casefold()]
+            if product_name_key(product['name']) == product_name_key(name)]
+
+
+def merge_duplicate_products(products):
+    expected = sorted(products, key=lambda product: product['id'])
+    ids = tuple(product['id'] for product in expected)
+    if len(set(ids)) < 2:
+        raise ValueError('Select at least two duplicate rows.')
+    with connect() as c:
+        lock_product_catalog(c)
+        placeholders = ','.join('?' for _ in ids)
+        lock = ' FOR UPDATE' if DATABASE_URL else ''
+        current = query(c, f'''SELECT id,sku,name,category,unit,stock FROM products
+                               WHERE id IN ({placeholders}) ORDER BY id{lock}''', ids).fetchall()
+        fields = ('id', 'sku', 'name', 'category', 'unit', 'stock')
+        if [tuple(p[f] for f in fields) for p in current] != [tuple(p[f] for f in fields) for p in expected]:
+            raise ValueError('The warehouse rows changed. Close this dialog and review the current balances.')
+        if len({(product_name_key(p['name']), p['category'], p['unit']) for p in current}) != 1:
+            raise ValueError('The product names, categories, and units must match.')
+        keep_id, *duplicate_ids = ids
+        query(c, 'UPDATE products SET stock=? WHERE id=?', (sum(p['stock'] for p in current), keep_id))
+        for duplicate_id in duplicate_ids:
+            query(c, 'UPDATE movements SET product_id=? WHERE product_id=?', (keep_id, duplicate_id))
+            query(c, 'DELETE FROM products WHERE id=?', (duplicate_id,))
 
 
 def edit_product(product_id, sku, name, category):
@@ -169,7 +196,7 @@ def add_product(sku, name, category, unit, quantity, *, source=None):
         lock_product_catalog(c)
         matches = matching_products(c, name, category)
         if len(matches) > 1:
-            raise ValueError('More than one warehouse row has this product name. Use Receive stock to select the correct row.')
+            raise ValueError('More than one warehouse row has this name. Review the matching rows in Warehouse stock.')
         if matches:
             product = matches[0]
             if unit != product['unit']:

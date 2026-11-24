@@ -35,10 +35,11 @@ Render Free PostgreSQL expires after 30 days and has no managed backups. Export 
 
 ## Workflow
 
-1. Open **Add product**. Enter its name, category, how you count it, and how many came in. If the name and category match an existing product, saving adds the delivery to its warehouse row. Capitalization and extra spaces are ignored, and the unit must match.
+1. Open **Add product**. Start typing the product name and select a suggestion, or press Enter to use a new name. Enter its category, how you count it, and how many came in. If the name and category match an existing product, saving adds the delivery to its warehouse row. Capitalization and extra spaces are ignored, and the unit must match.
 2. For another delivery of an existing product, open **Receive stock**, select the product, and enter the new quantity and supplier or person. Each delivery appears under **Received from**.
 3. When stock leaves, open **Send stock** and enter the quantity and the customer or job site. The destination appears under **Sent to**.
 4. On **Warehouse stock**, search by product name, category, or SKU. Use **Edit** on a product row to change its name or category. **Delete** requires confirmation and removes the product's first delivery, if present. Products with later stock activity cannot be deleted.
+5. Use **Merge** for existing rows with matching names, categories, and units. Check that the balances represent separate quantities before you confirm. The combined row keeps the oldest SKU and all movement history.
 
 In pgAdmin, open **Schemas → public → Views → warehouse_products** for a stock list with just the product, category, quantity in stock, and unit.
 

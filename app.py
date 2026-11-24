@@ -228,12 +228,36 @@ def edit_product_details(product):
                 show_saved_stock('Product updated.')
 
 
+@st.dialog('Merge duplicate products')
+def confirm_product_merge(products):
+    st.write(products[0]['name'])
+    unit = unit_labels.get(products[0]['unit'], products[0]['unit'])
+    for product in products:
+        st.text(f"{product['sku']} · {product['stock']:g} {unit}")
+    st.write(f"Combined stock: {sum(p['stock'] for p in products):g} {unit}")
+    st.caption('The oldest product row keeps its SKU. All receipts and dispatches move to that row.')
+    confirmed = st.checkbox('These balances represent separate quantities of the same product.')
+    if st.button('Merge products', type='primary', disabled=not confirmed):
+        try:
+            db.merge_duplicate_products(products)
+        except ValueError as exc:
+            st.error(str(exc))
+        except db.IntegrityError:
+            st.error('Could not merge these products. No changes were saved.')
+        else:
+            show_saved_stock('Duplicate rows merged. Stock history was preserved.')
+
+
 def inventory_dashboard():
     search = st.text_input('Search warehouse stock', placeholder='Product name, category, or SKU')
     products = db.overview_products()
     if not products:
         st.info('Go to Add product to get started.')
         return
+    duplicates = {}
+    for product in products:
+        key = (db.product_name_key(product['name']), product['category'], product['unit'])
+        duplicates.setdefault(key, []).append(product)
     terms = search.casefold().split()
     products = [
         product for product in products
@@ -243,21 +267,23 @@ def inventory_dashboard():
     if not products:
         st.info('No products match your search.')
         return
-    groups = [
-        ('Panels', [p for p in products if p['category'] == 'Panels']),
-        ('Inverters', [p for p in products if p['category'] == 'Inverters']),
-        ('Other products', [p for p in products if p['category'] not in ('Panels', 'Inverters')]),
-    ]
-    for heading, group in groups:
+    groups = {}
+    for product in products:
+        groups.setdefault(product['category'], []).append(product)
+    for heading in sorted(groups, key=lambda category: (category not in ('Panels', 'Inverters'),
+                                                       category != 'Panels', category.casefold())):
+        group = groups[heading]
         if group:
             st.subheader(heading)
-            widths = [3, 2, 2, 1, 1.2]
+            has_duplicates = any(len(duplicates[(db.product_name_key(p['name']), p['category'], p['unit'])]) > 1
+                                 for p in group)
+            widths = [3, 2, 2, 1, 1.2] + ([1.2] if has_duplicates else [])
             with st.container(border=True):
                 headers = st.columns(widths)
                 for column, label in zip(headers, ('Product', 'In stock', 'Last received')):
                     column.markdown(f'**{label}**')
                 for product in group:
-                    name, stock, received, edit, delete = st.columns(widths, vertical_alignment='center')
+                    name, stock, received, edit, delete, *merge = st.columns(widths, vertical_alignment='center')
                     unit = unit_labels.get(product['unit'], product['unit'])
                     name.text(product['name'])
                     stock.text(f"{product['stock']:g} {unit}")
@@ -268,6 +294,10 @@ def inventory_dashboard():
                     if delete.button('Delete', key=f"delete-product-{product['id']}",
                                      help=f"Delete {product['name']}"):
                         confirm_product_deletion(product)
+                    matches = duplicates[(db.product_name_key(product['name']), product['category'], product['unit'])]
+                    if len(matches) > 1 and merge[0].button('Merge', key=f"merge-product-{product['id']}",
+                                                            help=f"Merge duplicate rows for {product['name']}"):
+                        confirm_product_merge(matches)
 
 
 def show_movement_history(records, party_column, empty_message):
@@ -284,15 +314,33 @@ if page == 'Overview':
     inventory_dashboard()
 
 elif page == 'Inventory':
-    with st.form('product', clear_on_submit=True):
-        name = st.text_input('Product name *', placeholder='For example, Waaree TOPCon panel')
-        category = st.selectbox('Category', list(db.CATEGORIES))
-        unit = st.selectbox('Count in', ['Nos', 'Metres', 'Sets', 'Kg', 'Rolls', 'Bundles'],
-                           format_func=lambda unit: unit_labels.get(unit, unit))
+    catalog = db.rows('SELECT name,category,unit FROM products ORDER BY name,sku')
+    suggestions = {}
+    for product in catalog:
+        suggestions.setdefault(db.product_name_key(product['name']), product['name'])
+    name = st.selectbox('Product name *', list(suggestions.values()), index=None,
+                        accept_new_options=True, filter_mode='contains',
+                        placeholder='Search or type a product name',
+                        help='Select an existing product or press Enter to use a new name.')
+    name_key = db.product_name_key(name or '')
+    matching_details = {(p['category'], p['unit']) for p in catalog
+                        if db.product_name_key(p['name']) == name_key}
+    categories = list(dict.fromkeys([*db.CATEGORIES, *(p['category'] for p in catalog)]))
+    units = list(dict.fromkeys(['Nos', 'Metres', 'Sets', 'Kg', 'Rolls', 'Bundles',
+                               *(p['unit'] for p in catalog)]))
+    default_category, default_unit = categories[0], units[0]
+    if len(matching_details) == 1:
+        default_category, default_unit = next(iter(matching_details))
+    with st.form(f'product-{name_key}', clear_on_submit=True):
+        category = st.selectbox('Category', categories, index=categories.index(default_category),
+                                key=f'add-product-category-{name_key}')
+        unit = st.selectbox('Count in', units, index=units.index(default_unit),
+                            key=f'add-product-unit-{name_key}',
+                            format_func=lambda unit: unit_labels.get(unit, unit))
         quantity = st.number_input('How many came in? *', min_value=0.01, value=None, placeholder='Enter quantity')
         source = st.text_input('Received from (optional)', placeholder='Supplier or person').strip()
         if st.form_submit_button('Add product', type='primary'):
-            if not name.strip():
+            if not name_key:
                 st.error('Enter the product name.')
             elif quantity is None:
                 st.error('Enter how many came in.')
